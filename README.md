@@ -210,6 +210,125 @@ sequenceDiagram
 
 ## 4. Part C Account-Service
 
+### What was implemented
+
+All code lives under `com.bank.accountservice` and follows the mandatory layering:
+
+| Layer | Package | Contents |
+| --- | --- | --- |
+| Domain | `domain/` | `Account`, `AccountStatus`, `AccountNotFoundException`, `InsufficientFundsException`, `InvalidOperationException` |
+| Repository | `repository/` | `AccountRepository extends JpaRepository<Account,UUID>` plus `findByCustomerReference` |
+| Service | `service/` | `AccountService` (all business validation) and the `TransferResult` record |
+| REST | `web/rest/` | `AccountController`, `TransferController`, request/response DTOs, `GlobalExceptionHandler` |
+
+`AccountService` exposes `create`, `findById`, `findAll`, `findByCustomerReference`, `updateStatus`,
+`getBalance`, `debit`, `credit` and `transfer`. `transfer` is `@Transactional` and moves the amount
+atomically: both accounts must exist, be `ACTIVE`, share the same currency, hold enough funds and
+be two different accounts. The controllers only map HTTP to service calls: no rule lives there.
+
+### Seed data
+
+`SeedData` (a `CommandLineRunner`) fills the in-memory H2 database and prints the UUIDs:
+
+| Customer | Status | Currency | Balance |
+| --- | --- | --- | --- |
+| CUST-001 | ACTIVE | EUR | 5000 |
+| CUST-002 | ACTIVE | EUR | 3000 |
+| CUST-003 | BLOCKED | EUR | 1500 |
+
+### Technical choices
+
+- **H2 in memory** (`jdbc:h2:mem:accountdb`) with `ddl-auto: update`, so the schema is rebuilt at
+  every start and the seed data runs again.
+- **Lombok** on the entity (`@Getter`, `@Setter`, `@Builder`), **records** for the DTOs so that
+  Bean Validation annotations bind to the constructor parameters.
+- **`maven-compiler-plugin` now sets `<parameters>true</parameters>`** in the parent POM. Without
+  it every `@PathVariable UUID id` returned `400` with *"Name for argument of type [java.util.UUID]
+  not specified"*, because Spring needs the parameter names and the default build does not keep them.
+- **Errors**: one `@RestControllerAdvice` returns `{timestamp,status,error,message}` with
+  `404` unknown account, `400` Bean Validation or malformed input, `409` broken business rule.
+- account-service registers in Eureka and imports the config server like every other service.
+
+### Run commands
+
+```bash
+.\mvnw.cmd clean package
+java -jar config-service/target/config-service-1.0.0.jar
+java -jar discovery-service/target/discovery-service-1.0.0.jar
+java -jar account-service/target/account-service-1.0.0.jar
+```
+
+Run only the tests of this module:
+
+```bash
+.\mvnw.cmd -pl account-service test
+```
+
+### Curl examples (one per endpoint)
+
+Replace `$ID` with an UUID printed in the log at start, for example `CUST-001`.
+
+```bash
+# 1. Create an account -> 201
+curl -i -X POST http://localhost:8081/api/accounts -H 'Content-Type: application/json' \
+  -d '{"customerReference":"CUST-004","currency":"EUR","balance":750}'
+# {"id":"...","customerReference":"CUST-004","status":"ACTIVE","currency":"EUR","balance":750.0}
+
+# 2. List all accounts -> 200
+curl http://localhost:8081/api/accounts
+# [{"id":"...","customerReference":"CUST-001","status":"ACTIVE","currency":"EUR","balance":5000.0}, ...]
+
+# 3. Get one account -> 200, or 404 when the id does not exist
+curl http://localhost:8081/api/accounts/$ID
+
+# 4. Get the balance -> 200
+curl http://localhost:8081/api/accounts/$ID/balance
+# {"balance":5000.0}
+
+# 5. Change the status -> 200
+curl -X PATCH http://localhost:8081/api/accounts/$ID/status \
+  -H 'Content-Type: application/json' -d '{"status":"BLOCKED"}'
+
+# 6. Debit -> 200, 409 when the funds are not enough or the account is BLOCKED
+curl -X POST http://localhost:8081/api/accounts/$ID/debit \
+  -H 'Content-Type: application/json' -d '{"amount":500}'
+
+# 7. Credit -> 200
+curl -X POST http://localhost:8081/api/accounts/$ID/credit \
+  -H 'Content-Type: application/json' -d '{"amount":500}'
+
+# 8. Transfer -> 201, 409 on insufficient funds, blocked account or currency mismatch
+curl -i -X POST http://localhost:8081/api/transfers -H 'Content-Type: application/json' \
+  -d "{\"fromAccountId\":\"$FROM\",\"toAccountId\":\"$TO\",\"amount\":1000}"
+# {"fromAccountId":"...","toAccountId":"...","amount":1000.0,"currency":"EUR","fromBalance":4000.0,"toBalance":4000.0}
+```
+
+Error bodies actually observed:
+
+```json
+{"timestamp":"2026-10-30T10:54:09Z","status":404,"error":"Not Found","message":"Account not found: 00000000-0000-0000-0000-000000000000"}
+{"timestamp":"2026-10-30T10:53:38Z","status":400,"error":"Bad Request","message":"amount must be greater than 0"}
+{"timestamp":"2026-10-30T10:53:39Z","status":409,"error":"Conflict","message":"Insufficient funds on account ...: balance is 4000.0 but 999999.0 was requested"}
+```
+
+### Tests
+
+`AccountServiceTest` (JUnit 5 + Mockito, repository mocked): transfer between two ACTIVE accounts,
+transfer rejected for insufficient funds, transfer rejected on a BLOCKED account.
+
+```text
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
+```
+
+![Account-service startup log with the seeded UUIDs](docs/screenshots/07-account-service-seed-log.png)
+*Screenshot to add*
+
+![GET all accounts](docs/screenshots/08-account-list.png)
+*Screenshot to add*
+
+![Transfer result and 409 conflict](docs/screenshots/09-account-transfer-result.png)
+*Screenshot to add*
+
 ## 5. Part C Transaction-Service, OpenFeign and Resilience4J
 
 ## 6. Part D Technical services (Gateway, Eureka, Config)
