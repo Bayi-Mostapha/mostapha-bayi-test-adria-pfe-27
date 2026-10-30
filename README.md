@@ -311,6 +311,102 @@ Error bodies actually observed:
 {"timestamp":"2026-10-30T10:53:39Z","status":409,"error":"Conflict","message":"Insufficient funds on account ...: balance is 4000.0 but 999999.0 was requested"}
 ```
 
+### GraphQL
+
+The same service layer is also exposed over GraphQL with `spring-boot-starter-graphql`.
+Two controllers live in `web/graphql/` and call **only** `AccountService`: `AccountQueryController`
+(`@QueryMapping`) and `AccountMutationController` (`@MutationMapping`, `@Argument`).
+
+| Setting | Value |
+| --- | --- |
+| Endpoint | `http://localhost:8081/graphql/accounts` (`spring.graphql.path`) |
+| GraphiQL | `http://localhost:8081/graphiql` (enabled, redirects with `?path=/graphql/accounts`) |
+| Schema | `src/main/resources/graphql/schema.graphqls` |
+
+Schema summary: `enum AccountStatus`, `type Account`, `input AccountCreateInput`, `input TransferInput`,
+`type TransferResult`, `Query { accounts, accountById(id), accountsByCustomer(customerReference) }`,
+`Mutation { createAccount(input), updateAccountStatus(id, status), transfer(input) }`.
+
+**Sample query to paste into GraphiQL** (open `http://localhost:8081/graphiql`, the endpoint is preselected):
+
+```graphql
+query AccountsOverview {
+  accounts {
+    id
+    customerReference
+    status
+    currency
+    balance
+  }
+  accountById(id: "PASTE-A-SEED-UUID") {
+    id
+    status
+    balance
+  }
+  accountsByCustomer(customerReference: "CUST-002") {
+    id
+    customerReference
+    balance
+  }
+}
+```
+
+**Sample mutation to paste into GraphiQL:**
+
+```graphql
+mutation MoveMoney {
+  transfer(input: {
+    fromAccountId: "PASTE-ACTIVE-UUID-1"
+    toAccountId: "PASTE-ACTIVE-UUID-2"
+    amount: 250
+  }) {
+    fromAccountId
+    toAccountId
+    amount
+    currency
+    fromBalance
+    toBalance
+  }
+}
+```
+
+The two other mutations:
+
+```graphql
+mutation CreateAccount {
+  createAccount(input: { customerReference: "CUST-100", currency: "EUR", balance: 42.5, status: ACTIVE }) {
+    id
+    customerReference
+    status
+    currency
+    balance
+  }
+}
+
+mutation BlockAccount {
+  updateAccountStatus(id: "PASTE-A-SEED-UUID", status: BLOCKED) {
+    id
+    status
+  }
+}
+```
+
+Same thing from the command line:
+
+```bash
+curl -X POST http://localhost:8081/graphql/accounts -H 'Content-Type: application/json' \
+  -d '{"query":"{ accounts { id customerReference status currency balance } }"}'
+# {"data":{"accounts":[{"id":"...","customerReference":"CUST-001","status":"ACTIVE","currency":"EUR","balance":5000.0}, ...]}}
+```
+
+Verified live: all three queries, all three mutations, `accountById` returning `null` for an unknown id,
+and business failures returned as `"errors":[...]` with `"data":null` (the detailed message, for example
+*"Account ... is BLOCKED and cannot be used for this operation"*, is written to the service log).
+GraphQL validation mistakes are reported as `ValidationError`, for example requesting an unknown field.
+
+![GraphiQL with the accounts query](docs/screenshots/10-graphiql-accounts-query.png)
+*Screenshot to add*
+
 ### Tests
 
 `AccountServiceTest` (JUnit 5 + Mockito, repository mocked): transfer between two ACTIVE accounts,

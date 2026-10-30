@@ -1,0 +1,53 @@
+"Lifecycle of an account. A BLOCKED account is frozen."
+enum AccountStatus {
+  ACTIVE
+  BLOCKED
+}
+
+type Account {
+  id: ID!
+  customerReference: String!
+  status: AccountStatus!
+  currency: String!
+  balance: Float!
+}
+
+input AccountCreateInput {
+  customerReference: String!
+  currency: String!
+  balance: Float!
+  status: AccountStatus
+}
+
+input TransferInput {
+  fromAccountId: ID!
+  toAccountId: ID!
+  amount: Float!
+}
+
+type TransferResult {
+  fromAccountId: ID!
+  toAccountId: ID!
+  amount: Float!
+  currency: String!
+  fromBalance: Float!
+  toBalance: Float!
+}
+
+type Query {
+  "All accounts."
+  accounts: [Account!]!
+  "One account, null when the id does not exist."
+  accountById(id: ID!): Account
+  "The accounts of one customer, empty when the reference is unknown."
+  accountsByCustomer(customerReference: String!): [Account!]!
+}
+
+type Mutation {
+  "Creates an account. The status defaults to ACTIVE when omitted."
+  createAccount(input: AccountCreateInput!): Account!
+  "Blocks or unblocks an account."
+  updateAccountStatus(id: ID!, status: AccountStatus!): Account!
+  "Moves an amount atomically between two accounts."
+  transfer(input: TransferInput!): TransferResult!
+}

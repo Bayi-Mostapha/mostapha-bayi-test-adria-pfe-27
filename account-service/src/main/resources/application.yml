@@ -18,3 +18,8 @@ spring:
   h2:
     console:
       enabled: true
+  graphql:
+    path: /graphql/accounts
+    graphiql:
+      enabled: true
+      path: /graphiql
