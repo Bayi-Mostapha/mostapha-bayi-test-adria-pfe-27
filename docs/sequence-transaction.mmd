@@ -1,0 +1,21 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as gateway-service :8080
+    participant T as transaction-service :8082
+    participant A as account-service :8081
+    participant K as Kafka topic bank.transactions.created
+
+    C->>G: POST /api/transactions
+    G->>T: POST /api/transactions
+    Note over T: check amount is greater than 0 and lower than or equal to bank.transaction.max-amount (1000)
+    T->>A: GET /api/accounts/{accountId} via OpenFeign
+    A-->>T: 200 OK with status, currency and balance
+    Note over T: validate status is ACTIVE, currency matches the account, balance is enough
+    T->>T: save Transaction in H2
+    T->>A: PUT /api/accounts/{accountId}/balance via OpenFeign
+    A-->>T: 200 OK with the updated account
+    T->>K: publish TransactionCreatedEvent with key = accountId
+    K-->>T: acknowledged
+    T-->>G: 201 Created with the Transaction body
+    G-->>C: 201 Created with the Transaction body

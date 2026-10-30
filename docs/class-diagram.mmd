@@ -1,0 +1,108 @@
+classDiagram
+    direction LR
+
+    class Account {
+        +UUID id
+        +String customerReference
+        +AccountStatus status
+        +String currency
+        +double balance
+    }
+
+    class AccountStatus {
+        <<enumeration>>
+        ACTIVE
+        BLOCKED
+    }
+
+    class Transaction {
+        +UUID id
+        +UUID accountId
+        +BigDecimal amount
+        +String currency
+        +String merchantCategory
+        +String country
+        +Instant createdAt
+    }
+
+    class AccountRequest
+    class AccountResponse
+    class TransactionRequest
+    class TransactionResponse
+
+    class TransactionCreatedEvent {
+        +UUID transactionId
+        +UUID accountId
+        +BigDecimal amount
+        +String currency
+        +Instant createdAt
+    }
+
+    class AccountController {
+        <<REST>>
+        +create(request) response
+    }
+    class AccountGraphQLController {
+        <<GraphQL>>
+        +account(id) response
+    }
+    class AccountMcpTools {
+        <<MCP>>
+        +getAccount(id) response
+    }
+    class AccountService
+    class AccountRepository
+
+    class TransactionController {
+        <<REST>>
+        +create(request) response
+    }
+    class TransactionGraphQLController {
+        <<GraphQL>>
+        +transaction(id) response
+    }
+    class TransactionMcpTools {
+        <<MCP>>
+        +getTransaction(id) response
+    }
+    class TransactionService
+    class TransactionRepository
+
+    class AccountClient {
+        <<OpenFeign>>
+        +getAccount(id) AccountResponse
+        +updateBalance(id, amount) AccountResponse
+    }
+    class AccountClientFallback {
+        <<Resilience4J>>
+        +getAccount(id) AccountResponse
+    }
+
+    class KafkaTransactionPublisher {
+        <<Kafka producer>>
+        +publish(event)
+    }
+    class KafkaEventConsumer {
+        <<Kafka consumer>>
+        +onTransactionCreated(event)
+    }
+
+    Account --> AccountStatus : status
+    AccountRequest ..> AccountResponse : mapped to
+    TransactionRequest ..> TransactionResponse : mapped to
+    TransactionCreatedEvent ..> Transaction : published after save
+
+    AccountController --> AccountService
+    AccountGraphQLController --> AccountService
+    AccountMcpTools --> AccountService
+    AccountService --> AccountRepository
+
+    TransactionController --> TransactionService
+    TransactionGraphQLController --> TransactionService
+    TransactionMcpTools --> TransactionService
+    TransactionService --> TransactionRepository
+    TransactionService --> AccountClient : OpenFeign
+    AccountClient --> AccountClientFallback : fallback on failure
+
+    TransactionService --> KafkaTransactionPublisher : after save
+    KafkaTransactionPublisher --> KafkaEventConsumer : bank.transactions.created

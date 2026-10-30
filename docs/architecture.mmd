@@ -1,0 +1,40 @@
+flowchart LR
+    Client["REST client - curl / Swagger"] --> GW["gateway-service :8080"]
+    Telegram["Telegram / Discord"] --> GW
+
+    subgraph Business["Business services"]
+        ACC["account-service :8081"]
+        TXN["transaction-service :8082"]
+        BOT["chatbot-service :8083"]
+    end
+
+    GW --> ACC
+    GW --> TXN
+    GW --> BOT
+
+    subgraph Tech["Technical services"]
+        EUREKA["Eureka :8761"]
+        CONFIG["Config Server :8888"]
+    end
+
+    CONSUMER["event-consumer-service :8084"]
+
+    GW -->|registers and discovers| EUREKA
+    ACC -->|registers and discovers| EUREKA
+    TXN -->|registers and discovers| EUREKA
+    BOT -->|registers and discovers| EUREKA
+    CONSUMER -->|registers and discovers| EUREKA
+
+    GW -->|loads config| CONFIG
+    ACC -->|loads config| CONFIG
+    TXN -->|loads config| CONFIG
+    BOT -->|loads config| CONFIG
+    CONSUMER -->|loads config| CONFIG
+
+    TXN -->|"OpenFeign + Resilience4J circuit breaker"| ACC
+    TXN -->|"Kafka topic bank.transactions.created"| KAFKA["Kafka KRaft :9092"]
+    KAFKA -->|"consume and log only"| CONSUMER
+
+    BOT -->|LLM| LLM["LLM provider"]
+    BOT -->|"MCP client"| MCP1["MCP server in account-service"]
+    BOT -->|"MCP client"| MCP2["MCP server in transaction-service"]
