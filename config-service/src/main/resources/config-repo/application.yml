@@ -1,0 +1,12 @@
+bank:
+  transaction:
+    max-amount: 1000
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,refresh,circuitbreakers,circuitbreakerevents
