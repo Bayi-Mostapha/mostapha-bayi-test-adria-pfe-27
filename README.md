@@ -407,6 +407,92 @@ GraphQL validation mistakes are reported as `ValidationError`, for example reque
 ![GraphiQL with the accounts query](docs/screenshots/10-graphiql-accounts-query.png)
 *Screenshot to add*
 
+### MCP server
+
+The account-service also publishes its service layer as an MCP server so the agentic chatbot can
+call it. Dependency `spring-ai-starter-mcp-server-webmvc`, tools in `mcp/AccountMcpTools`.
+Every `@Tool` method only delegates to `AccountService`, so REST, GraphQL and MCP share the exact
+same validation. The tools are published by the `ToolCallbackProvider` bean built with
+`MethodToolCallbackProvider.builder().toolObjects(...)` in `mcp/AccountMcpConfiguration`; the
+auto-configuration picks up any `ToolCallbackProvider` bean and registers its callbacks (the log
+confirms it: `McpServerAutoConfiguration - Registered tools: 6`).
+
+| Tool | Parameters | Returns |
+| --- | --- | --- |
+| `listAccounts` | - | list of accounts |
+| `getAccount` | `id` | account |
+| `getBalance` | `id` | balance |
+| `createAccount` | `customerReference`, `currency`, `balance`, `status` (optional) | account |
+| `updateAccountStatus` | `id`, `status` | account |
+| `transferFunds` | `fromAccountId`, `toAccountId`, `amount` | transfer result |
+
+Configuration (`application.yml`):
+
+```yaml
+spring:
+  ai:
+    mcp:
+      server:
+        name: account-mcp-server
+        version: 1.0.0
+        type: SYNC
+        sse-endpoint: /sse
+        sse-message-endpoint: /mcp/message
+```
+
+**Exact URLs used by Spring AI 1.0.3**: the SSE stream is `GET http://localhost:8081/sse` and the
+client posts JSON-RPC to `POST http://localhost:8081/mcp/message?sessionId=<uuid>` on the same port
+8081. Selecting SSE is done by adding the `webmvc` starter: **there is no `spring.ai.mcp.server.protocol`
+property in 1.0.x** (it only exists from 1.1 onwards), so setting it would be silently ignored.
+`/sse` and `/mcp/message` are the defaults, they are written out above to make them explicit.
+
+**How to verify**
+
+```bash
+# 1. Open the stream, it stays open and answers immediately
+curl -N http://localhost:8081/sse
+# id:5b32cc6d-bc3c-451d-8ba4-6c5bfea5e7a9
+# event:endpoint
+# data:/mcp/message?sessionId=5b32cc6d-bc3c-451d-8ba4-6c5bfea5e7a9
+
+# 2. Use the sessionId from that event
+SID=5b32cc6d-bc3c-451d-8ba4-6c5bfea5e7a9
+U="http://localhost:8081/mcp/message?sessionId=$SID"
+
+# 3. Initialise the session
+curl -X POST "$U" -H 'Content-Type: application/json' -d '{
+  "jsonrpc":"2.0","id":1,"method":"initialize","params":{
+    "protocolVersion":"2025-03-26","capabilities":{},
+    "clientInfo":{"name":"curl-client","version":"1.0"}}}'
+curl -X POST "$U" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+# 4. List the six tools
+curl -X POST "$U" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# 5. Call one
+curl -X POST "$U" -H 'Content-Type: application/json' -d '{
+  "jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+    "name":"getBalance","arguments":{"id":"PASTE-A-SEED-UUID"}}}'
+```
+
+The POST only acknowledges with `200`; the JSON-RPC results arrive back **on the `/sse` stream** as
+`event: message`. Observed results:
+
+- `initialize` → `serverInfo {"name":"account-mcp-server","version":"1.0.0"}`
+- `tools/list` → the six tools with their `inputSchema` (parameter names come from the Java method
+  thanks to the `-parameters` compiler flag, descriptions from `@ToolParam`)
+- `tools/call getBalance` → `{"content":[{"type":"text","text":"5000.0"}],"isError":false}`
+- `tools/call transferFunds` (250 from 5000 to 3000) → `fromBalance 4750.0`, `toBalance 3250.0`
+- `tools/call transferFunds` from a BLOCKED account → `isError:true` with the message *"Account ...
+  is BLOCKED and cannot be used for this operation"*, the very message the service produces
+
+REST, GraphQL and GraphiQL keep answering `200` while the MCP server runs: they share the same port.
+
+![MCP SSE endpoint event](docs/screenshots/11-mcp-sse-endpoint.png)
+*Screenshot to add*
+
 ### Tests
 
 `AccountServiceTest` (JUnit 5 + Mockito, repository mocked): transfer between two ACTIVE accounts,

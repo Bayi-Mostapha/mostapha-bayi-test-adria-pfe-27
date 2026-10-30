@@ -23,3 +23,11 @@ spring:
     graphiql:
       enabled: true
       path: /graphiql
+  ai:
+    mcp:
+      server:
+        name: account-mcp-server
+        version: 1.0.0
+        type: SYNC
+        sse-endpoint: /sse
+        sse-message-endpoint: /mcp/message
