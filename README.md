@@ -513,6 +513,131 @@ Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
 
 ## 5. Part C Transaction-Service, OpenFeign and Resilience4J
 
+### What was implemented
+
+All code lives under `com.bank.transactionservice` and follows the mandatory layering:
+
+| Layer | Package | Contents |
+| --- | --- | --- |
+| Domain | `domain/` | `Transaction`, `TransactionLimitExceededException`, `AccountNotActiveException`, `CurrencyMismatchException`, `InsufficientBalanceException`, `AccountServiceUnavailableException`, `AccountNotFoundException`, `TransactionNotFoundException` |
+| Repository | `repository/` | `TransactionRepository extends JpaRepository<Transaction,UUID>` plus `findByAccountIdOrderByCreatedAtDesc` |
+| Service | `service/` | `TransactionService`, `TransactionLimitHolder`, `AccountGateway` + `RestClientAccountGateway`, `TransactionEventPublisher` + `NoOpTransactionEventPublisher`, `AccountSnapshot`, `TransactionSummary` |
+| REST | `web/rest/` | `TransactionController`, request/response DTOs, `GlobalExceptionHandler` |
+
+`Transaction` keeps exactly the specified fields; `amount` is `BigDecimal(19,2)`, `createdAt` is an
+`Instant` filled by `@PrePersist`, and the table is named `transactions` because `TRANSACTION` is a
+reserved SQL word.
+
+**Order of the rules in `TransactionService.create`, exactly as specified:**
+
+1. `amount > 0`
+2. `amount <= bank.transaction.max-amount`
+3. read the account
+4. account must be `ACTIVE`
+5. currencies must match
+6. balance must be enough
+7. `save` (`@Transactional`)
+8. debit the account
+9. publish the event through `TransactionEventPublisher`
+
+### Technical choices
+
+- **`AccountGateway` is an interface**, implemented today by `RestClientAccountGateway` with a
+  `@LoadBalanced RestClient.Builder` and the Eureka service id `http://account-service`. Spring
+  Cloud's `LoadBalancerRestClientBuilderBeanPostProcessor` resolves it to a real instance, so the
+  next step can swap in Feign by changing only the implementation.
+- The builder bean is declared in `RestClientConfiguration`: Boot exposes no load-balanced builder
+  by itself, and `@LoadBalanced` acts as a qualifier, so injecting one without declaring it fails
+  with *"No qualifying bean of type RestClient$Builder"*.
+- **`bank.transaction.max-amount`** is injected with `@Value` in `TransactionLimitHolder`, a bean
+  annotated `@RefreshScope`, so the value published by config-service can change at runtime.
+- **`TransactionEventPublisher`** is an interface with a no-op implementation that only logs;
+  Kafka is wired in the next step.
+- Errors: `400` validation or malformed body, `404` unknown transaction or unknown account,
+  `409` broken business rule, `503` account-service unreachable, `404/405/415` for wrong path,
+  method or content type, `500` for the unexpected.
+
+### Endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/api/transactions` | create a transaction |
+| GET | `/api/transactions` | list all |
+| GET | `/api/transactions/{id}` | one transaction |
+| GET | `/api/transactions/account/{accountId}` | transactions of an account, newest first |
+
+`TransactionService.summary(accountId)` (count and total amount) is implemented but not exposed
+over HTTP yet.
+
+### Run commands
+
+```bash
+.\mvnw.cmd clean package
+java -jar config-service/target/config-service-1.0.0.jar        # first, it serves the limit
+java -jar discovery-service/target/discovery-service-1.0.0.jar
+java -jar account-service/target/account-service-1.0.0.jar
+java -jar transaction-service/target/transaction-service-1.0.0.jar
+.\mvnw.cmd -pl transaction-service test
+```
+
+### Curl tests
+
+```bash
+ID=<account UUID printed by account-service at start>
+
+# A normal transaction debits the account
+curl http://localhost:8081/api/accounts/$ID/balance
+# {"balance":5000.0}
+
+curl -i -X POST http://localhost:8082/api/transactions -H 'Content-Type: application/json' \
+  -d "{\"accountId\":\"$ID\",\"amount\":250.00,\"currency\":\"EUR\",\"merchantCategory\":\"GROCERIES\",\"country\":\"FR\"}"
+# HTTP 201
+# {"id":"43ba0971-...","accountId":"4c6c9ae0-...","amount":250.00,"currency":"EUR",
+#  "merchantCategory":"GROCERIES","country":"FR","createdAt":"2026-10-30T12:02:42.421957900Z"}
+
+curl http://localhost:8081/api/accounts/$ID/balance
+# {"balance":4750.0}          <- debited through the load balanced RestClient
+
+# An amount of 1500 is rejected
+curl -i -X POST http://localhost:8082/api/transactions -H 'Content-Type: application/json' \
+  -d "{\"accountId\":\"$ID\",\"amount\":1500.00,\"currency\":\"EUR\",\"merchantCategory\":\"TRAVEL\",\"country\":\"FR\"}"
+# HTTP 409
+# {"timestamp":"2026-10-30T12:02:44Z","status":409,"error":"Conflict",
+#  "message":"Transaction amount 1500.00 exceeds the limit of 1000.0"}
+
+# The rejected transaction did not move any money
+# {"balance":4750.0}
+```
+
+Other responses actually observed:
+
+```json
+{"timestamp":"...","status":400,"error":"Bad Request","message":"accountId must not be null"}
+{"timestamp":"...","status":400,"error":"Bad Request","message":"amount must be greater than 0"}
+{"timestamp":"...","status":404,"error":"Not Found","message":"Transaction not found: 00000000-0000-0000-0000-000000000000"}
+{"timestamp":"...","status":409,"error":"Conflict","message":"Currency mismatch: account ... is in EUR but the transaction is in USD"}
+{"timestamp":"...","status":409,"error":"Conflict","message":"Account ... is BLOCKED and cannot receive transactions"}
+{"timestamp":"...","status":503,"error":"Service Unavailable","message":"account-service is not reachable: ... Connection refused"}
+```
+
+### Tests
+
+`TransactionServiceTest` (JUnit 5 + Mockito, every collaborator mocked): amount over 1000 rejected,
+blocked account, currency mismatch, insufficient funds, plus one success case asserting the debit
+and the event publication.
+
+```text
+Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
+```
+
+![Transaction created and balance debited](docs/screenshots/12-transaction-created-balance.png)
+*Screenshot to add*
+
+![Amount over the limit rejected with 409](docs/screenshots/13-transaction-limit-409.png)
+*Screenshot to add*
+
+OpenFeign and Resilience4J are covered in the next step of Part C.
+
 ## 6. Part D Technical services (Gateway, Eureka, Config)
 
 ### What was implemented
